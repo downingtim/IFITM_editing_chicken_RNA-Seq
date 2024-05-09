@@ -1,0 +1,743 @@
+---
+title: "RNA-Seq"
+---
+
+
+```{r}
+
+# cd /mnt/lustre/RDS-ephemeral/tennakoon/John/fivevets
+# transfer to bsp/
+
+# use R v4.3.2 (not earlier ones, which will generate errors) 
+
+if (!require("BiocManager", quietly = T)) { 
+    install.packages("BiocManager") }
+
+#install.packages("aggregation") # for genes from tx
+library(aggregation)
+#install.packages("devtools")
+library(devtools)
+#BiocManager::install("rhdf5")
+library(rhdf5)
+#devtools::install_github("pachterlab/sleuth")
+library(sleuth)
+#vignette('intro', package = 'sleuth')
+library(ggplot2)
+library(ggrepel)
+library(dplyr)
+library(ggpubr)
+library(grid)
+library(gridExtra)
+#BiocManager::install("limma")
+library(limma)
+#BiocManager::install("edgeR")
+library(edgeR)
+#BiocManager::install("tximport")
+library(tximport)
+
+# [1] Load a table describing our sample, conditions
+# and the source directories such that the 1st column
+# contains the sample names, the middle column(s)
+# contain the conditions, and the last column has the
+# folder containing the kallisto output
+s2c <- read.csv("table.new.csv", header=T, sep="\t")
+str(s2c) # check table 
+
+# our table is like this:
+##      sample c1 (ni/nd) c2 (WT/250/600) c3 (6/12) path
+
+# reallocate table into groups: 6 vs 12 hpi; WT-250 vs WT-60
+s2c_6 <- subset(s2c, c3==6) # n=29
+s2c_12 <- subset(s2c, c3==12) # n=30      # check overlaps
+
+s2c_not600 <- subset(s2c, c2!=600) # n=40  
+s2c_not250 <- subset(s2c, c2!=250) # n=39 # check overlaps
+
+s2c_not600_6 <- subset(s2c, c2!=600 & c3==6) # n=20  
+s2c_not250_6 <- subset(s2c, c2!=250 & c3==6) # n=19 # check overlaps
+
+s2c_not600_12 <- subset(s2c, c2!=600 & c3==12) # n=20  
+s2c_not250_12 <- subset(s2c, c2!=250 & c3==12) # n=20 # check overlaps
+
+# For analysis [4] infection within: WT, 250, 600
+s2c_WT_6 <- subset(s2c, c2=="WT" & c3==6) 
+s2c_WT_12 <- subset(s2c, c2=="WT" & c3==12) 
+s2c_250_6 <- subset(s2c, c2==250 & c3==6) 
+s2c_250_12 <- subset(s2c, c2==250 & c3==12) 
+s2c_600_6 <- subset(s2c, c2==600 & c3==6) 
+s2c_600_12 <- subset(s2c, c2==600 & c3==12) 
+
+# check files are present
+#file_test("-f","/mnt/lustre/RDS-live/downing/fivevets/kallisto/NI_600_6hpi_1/abundance.h5") 
+#dir.exists("/mnt/lustre/RDS-live/downing/fivevets/kallisto/NI_600_6hpi_1/")
+
+# Now, we will use sleuth_prep() to make an object 
+# with our experiment info, model and groups.
+so <- sleuth_prep(s2c, extra_bootstrap_summary=T, read_bootstrap_tpm=T)
+# 23,212 targets pass filter
+
+# with old table of all n=60
+#pdf("Exclude_sample_NI600_6hpi_4.pdf", width=15, height=15)
+#plot_pca(so, color_by = 'c1', text_labels=T) # do PCA
+#dev.off()
+
+# PCA plots - infection status
+pdf("Basic_PCA_c1.pdf", width=20.5/1.5, height=11.5/1.5)
+p11 <- plot_pca(so, color_by = 'c1', scale. =T, text_labels=T)  +
+  theme(axis.text=element_text(size=12), 
+        legend.text = element_text(size=18),
+        axis.title=element_text(size=18) ) +
+   labs(y= "PC2 (23%)", x = "PC1 (41%)") 
+p11 +  guides(fill=guide_legend(title=" "))# do PCA
+dev.off()
+
+# PCA - WT vs 250 vs 600
+pdf("Basic_PCA_c2.pdf", width=20.5/1.5, height=11.5/1.5)
+p1 <- plot_pca(so, color_by = 'c2', scale. =T, text_labels=T)  +
+  theme(axis.text=element_text(size=12), 
+        legend.text = element_text(size=18),
+        axis.title=element_text(size=18) ) +
+   labs(y= "PC2 (23%)", x = "PC1 (41%)") 
+p1 +  guides(fill=guide_legend(title=" "))# do PCA
+dev.off()
+
+# PCA - 6 vs 12 hpi
+pdf("Basic_PCA_c3.pdf", width=20.5/1.5, height=11.5/1.5)
+plot_pca(so, color_by = 'c3',scale. =T, text_labels=T)  +
+  theme(axis.text=element_text(size=12), 
+        legend.text = element_text(size=18),
+        axis.title=element_text(size=18) ) +
+   labs(y= "PC2 (23%)", x = "PC1 (41%)")  
+dev.off()
+
+pdf("plot_sample_heatmap.pdf", width=11, height=11)
+plot_sample_heatmap(so ,use_filtered = T, color_high = "white",
+  color_low = "dodgerblue", x_axis_angle = 50,
+  annotation_cols = setdiff(colnames(so$sample_to_covariates), "sample"),
+  cluster_bool = T)
+dev.off()
+
+pdf("plot_pc_variance.pdf")
+plot_pc_variance(so, use_filtered = T, units = "est_counts",
+     pca_number = NULL, scale = F, PC_relative = NULL, ylim(0,50) )
+dev.off()
+
+############################################
+# Now we will examine the TPM data using tximport instead
+files = paste(s2c$path, "abundance.h5", sep="/")
+
+# Import Kallisto abundance.h5 files with tximport
+txi.kallisto <- tximport(files, type = "kallisto", txOut = T)
+str(txi.kallisto)
+head(txi.kallisto$counts)
+
+y <- DGEList(txi.kallisto$counts)
+dim(y) # 29,171
+
+# filtering using the design information:
+design <- model.matrix(~c1+c2+c3 , data=full)
+keep <- filterByExpr(y, design)
+y <- y[keep, ]
+str(y) # 29,165
+
+# normalize and run voom transformation
+y <- calcNormFactors(y)
+v <- voom(y, design)
+# v is now ready for lmFit()  
+
+fit <- lmFit(v, design) # eBayes stands for empirical Bayes
+fitm <- eBayes(fit, trend=T)
+str(fitm)
+out1 <- topTable(fitm, n=dim(fitm$coefficients)[1])
+str(out1) # 24,748
+write.csv(out1, "limma2.all.csv") # 29,165 transcripts 
+
+pdf("plotSA.limma.pdf")
+plotSA(fitm) # we have a variance trend, so keep trend=T in eBayes()
+dev.off()
+
+panel.cor <- function(x, y, digits=2, prefix="", cex.cor, ...) {
+    usr <- par("usr")
+    on.exit(par(usr))
+    par(usr = c(0, 1, 0, 1))
+    Cor <- abs(cor(x, y)) # Remove abs function if desired
+    txt <- paste0(prefix, format(c(Cor, 0.123456789), digits = digits)[1])
+    if(missing(cex.cor)) {  cex.cor <- 1 + 0.4 / strwidth(txt)  }
+    text(0.5, 0.5, txt, cex = 1 + cex.cor * Cor) 
+    } # Resize the text by level of correlation
+
+pdf("pairs.limma.pdf", width=6, height=6)
+pairs( out1[,1:4], cex=0.1, upper.panel = panel.cor,
+       lower.panel = panel.smooth, cex.labels = 1.5)
+dev.off()
+
+## c1 only ## to get log2FC
+
+y <- DGEList(txi.kallisto$counts)
+design1 <- model.matrix(~c1 , data=full)
+keep1 <- filterByExpr(y, design1)
+y <- y[keep1, ]
+v1 <- voom(calcNormFactors(y), design1)
+fitm1 <- eBayes(lmFit(v1, design1), trend=T)
+out1_1 <- topTable(fitm1, n=dim(fitm1$coefficients)[1])
+out1_1$target_id <- rownames(out1_1)
+out1_1_g <- inner_join(t2g, out1_1, by=join_by(target_id)) 
+str(out1_1_g) # 21,961
+write.csv(out1_1_g, "limma.c1.csv",quote=T,row.names=F) # c1
+
+# without filterByExpr
+y <- DGEList(txi.kallisto$counts)
+v1_2 <- voom(calcNormFactors(y), design1)
+fitm1_2 <- eBayes(lmFit(v1_2, design1), trend=T)
+out1_1_2 <- topTable(fitm1_2, n=dim(fitm1_2$coefficients)[1])
+out1_1_2$target_id <- rownames(out1_1_2)
+out1_1_g_2 <- inner_join(t2g, out1_1_2, by=join_by(target_id)) 
+str(out1_1_g_2) # 44,937 entries across 17,068 genes
+write.csv(out1_1_g_2, "limma.c1.nofilter.csv",quote=T,row.names=F) # c1
+
+## c2 only ## to get log2FC
+
+y <- DGEList(txi.kallisto$counts)
+design2 <- model.matrix(~c2 , data=full)
+keep2 <- filterByExpr(y, design2)
+y <- y[keep2, ]
+v2 <- voom(calcNormFactors(y), design2)
+fitm2 <- eBayes(lmFit(v2, design2), trend=T)
+out1_2 <- topTable(fitm2, n=dim(fitm2$coefficients)[1])
+out1_2$target_id <- rownames(out1_2)
+out1_2_g <- inner_join(t2g, out1_2, by=join_by(target_id)) 
+out1_2_g$logFC <- out1_2_g$c2WT
+out1_2_g <- out1_2_g[,-c(7,8)] # head(out1_2_g[1:4,c(7,8)])
+str(out1_2_g) # 23,307
+write.csv(out1_2_g, "limma.c2.csv",quote=T,row.names=F) # c2
+
+# without filterByExpr
+y <- DGEList(txi.kallisto$counts)
+v2_2 <- voom(calcNormFactors(y), design2)
+fitm2_2 <- eBayes(lmFit(v2_2, design2), trend=T)
+out1_2_2 <- topTable(fitm2_2, n=dim(fitm2_2$coefficients)[1])
+out1_2_2$target_id <- rownames(out1_2_2)
+out1_2_g_2 <- inner_join(t2g, out1_2_2, by=join_by(target_id)) 
+str(out1_2_g_2) # 44,937 entries across 17,068 genes
+write.csv(out1_2_g_2, "limma.c2.nofilter.csv",quote=T,row.names=F) # c2
+
+# without filter
+y <- DGEList(txi.kallisto$counts)
+v3_2 <- voom(calcNormFactors(y), design3)
+fitm3_2 <- eBayes(lmFit(v3_2, design3), trend=T)
+out1_3_2 <- topTable(fitm3_2, n=dim(fitm3_2$coefficients)[1])
+out1_3_2$target_id <- rownames(out1_3_2)
+out1_3_g_2 <- inner_join(t2g, out1_3_2, by=join_by(target_id)) 
+str(out1_3_g_2) # 44,937 entries across 17,068 genes
+write.csv(out1_3_g_2, "limma.c3.nofilter.csv",quote=T,row.names=F) # c3
+str(out1_3_g_2$ens_gene)
+
+## c3only ## to get log2FC
+
+y <- DGEList(txi.kallisto$counts)
+design3 <- model.matrix(~c3 , data=full)
+keep3 <- filterByExpr(y, design3)
+y <- y[keep3, ]
+v3 <- voom(calcNormFactors(y), design3)
+fitm3 <- eBayes(lmFit(v3, design3), trend=T)
+out1_3 <- topTable(fitm3, n=dim(fitm3$coefficients)[1])
+out1_3$target_id <- rownames(out1_3)
+out1_3_g <- inner_join(t2g, out1_3, by=join_by(target_id)) 
+str(out1_3_g) # 21,961
+write.csv(out1_3_g, "limma.c3.csv",quote=T,row.names=F) # c3
+
+#################################
+# Let's test across genes  
+# We need to map the isoforms to genes with BiomaRt
+# Note we need to have annotation matching our reference cDNAs
+
+# BiocManager::install("biomaRt")
+library(biomaRt)
+
+mart <- biomaRt::useMart(biomart = "ENSEMBL_MART_ENSEMBL",
+  dataset = "ggallus_gene_ensembl",
+  host = 'https://jan2024.archive.ensembl.org')
+str(mart) # check it worked # 2929
+t2g <- biomaRt::getBM(attributes = c("ensembl_transcript_id", 
+      "transcript_version", "ensembl_gene_id", "external_gene_name",
+            "description", "transcript_biotype"), mart = mart)
+str(t2g) # 72,689 rows of:
+        # ensembl_transcript_id
+        # ensembl_gene_id
+        # external_gene_name
+# now we'll rename the transcripts
+t2g <- dplyr::rename(t2g, target_id = ensembl_transcript_id,
+  ens_gene = ensembl_gene_id, ext_gene = external_gene_name)
+t2g$target_id <- paste(t2g$target_id, t2g$transcript_version,sep=".") # Re-name
+subset(t2g, ext_gene=="IL1B")# IL1B check for example
+
+# set up model
+so2 <- sleuth_prep(s2c, target_mapping=t2g, aggregation_column='ens_gene',
+                  extra_bootstrap_summary=T, read_bootstrap_tpm=T)
+
+# Next, we will smooth the tpm per sample using a parameter
+# based on our model - so here we estimate parameters for
+# response error measurement (full) model
+# this is our alternative model with DE
+so2 <- sleuth_fit(so2, ~c1 + c2 + c3, 'full')  # 23,212 passed filter
+
+# sanity check
+# get our null model r where the isoform levels are equal
+so2 <- sleuth_fit(so2, ~c1 + c2 + c3  , 'r')
+# we compare our null and alternative models
+# differential analysis using a likelihood ratio test (LRT)
+so2 <- sleuth_lrt(so2, 'r', 'full')
+sr <- sleuth_results(so2, 'r:full', 'lrt', show_all=F)
+dplyr::filter(sr, qval <= 0.05) # zero, phew
+models(so2) # check model details
+
+# c1 only: NI vs ND
+
+so2 <- sleuth_fit(so2, ~c2 + c3,   'c1only2')
+so2 <- sleuth_lrt(so2, 'c1only2', 'full')
+c1only2 <- sleuth_results(so2, 'c1only2:full', 'lrt', show_all=F)
+c1only2_q <- dplyr::filter(c1only2, qval <= 0.05) #
+str(c1only2_q) # 9,684 changed exp
+head(c1only2_q[,c(2:3,9,4)])
+write.csv(c1only2_q[,c(2:3,9,4)], "infection.DEgenes.csv",quote=T,row.names=F)
+write.csv(head(c1only2_q[,c(2:3,9,4)],n=100), "infection.DEgenes.top100.csv",quote=T,row.names=F)
+
+# wald test
+so2 <- sleuth_wt(so2, 'c1NI', 'full')
+wald1 <- dplyr::filter(sleuth_results(so2,'c1NI','wt', show_all=F,
+                                      gene_mode =T), qval<=0.05)
+str(wald1)
+
+# c2 only: WT vs 250 vs 600
+
+so2 <- sleuth_fit(so2, ~c1 + c3  , 'c2only2')
+so2 <- sleuth_lrt(so2, 'c2only2', 'full')
+c2only2 <- sleuth_results(so2, 'c2only2:full', 'lrt', show_all=F)
+c2only2_q <- dplyr::filter(c2only2, qval <= 0.05) #
+str(c2only2_q) # 10,305 changed exp
+head(c2only2_q[,c(2:3,9,4)])
+write.csv(c2only2_q[,c(2:3,9,4)], "CRISPR.DEgenes.csv",quote=T,row.names=F)
+write.csv(head(c2only2_q[,c(2:3,9,4)],n=100), "CRISPR.DEgenes.top100.csv",quote=T,row.names=F)
+
+# c3 only: 6 vs 12 hpi
+
+so2 <- sleuth_fit(so2, ~c1 + c2  , 'c3only2')
+so2 <- sleuth_lrt(so2, 'c3only2', 'full')
+c3only2 <- sleuth_results(so2, 'c3only2:full', 'lrt', show_all=F)
+c3only2_q <- dplyr::filter(c3only2, qval <= 0.05) #  ) #  )
+str(c3only2_q) # 6,444 changed exp
+head(c3only2_q[,c(2:3,9,4)])
+write.csv(c3only2_q[,c(2:3,9,4)], "time.DEgenes.csv",quote=T,row.names=F)
+write.csv(head(c3only2_q[,c(2:3,9,4)],n=100),"time.DEgenes.top100.csv",quote=T,row.names=F)
+
+# open google-chrome separately
+sleuth_live(so2) # activates interactive RShiny app
+# go to https://127.0.0.1:42427 on Chrome
+
+length(intersect(c1only2_q$target_id, c2only2_q$target_id)) # 9684 vs 10k = 9077
+length(intersect(c3only2_q$target_id, c2only2_q$target_id)) # 10k vs 6,444  = 6283
+length(intersect(c3only2_q$target_id, c1only2_q$target_id)) # 9684 vs 6,444  = 6126
+
+###### analysis [4]: infection status within WT, 250, 600 whose changes
+######               are also evident at 6 hpi and 12 hpi
+
+# set up 6 hpi for WT
+so2_WT_6 <- sleuth_prep(s2c_WT_6, target_mapping=t2g, aggregation_column='ens_gene',
+                  extra_bootstrap_summary=T, read_bootstrap_tpm=T)
+so2_WT_6 <- sleuth_fit(so2_WT_6, ~c1, 'full') 
+so2_WT_6 <- sleuth_fit(so2_WT_6, ~1,  's')
+so2_WT_6 <- sleuth_lrt(so2_WT_6, 's', 'full')
+c1_WT_6 <- sleuth_results(so2_WT_6, 's:full', 'lrt', show_all=F)
+c1_WT_6_q <- dplyr::filter(c1_WT_6, qval <= 0.05) #
+str(c1_WT_6_q) # 133 changed exp
+
+# set up 12 hpi for WT
+so2_WT_12 <- sleuth_prep(s2c_WT_12, target_mapping=t2g, aggregation_column='ens_gene',
+                  extra_bootstrap_summary=T, read_bootstrap_tpm=T)
+so2_WT_12 <- sleuth_fit(so2_WT_12, ~c1, 'full') 
+so2_WT_12 <- sleuth_fit(so2_WT_12, ~1,  's')
+so2_WT_12 <- sleuth_lrt(so2_WT_12, 's', 'full')
+c1_WT_12 <- sleuth_results(so2_WT_12, 's:full', 'lrt', show_all=F)
+c1_WT_12_q <- dplyr::filter(c1_WT_12, qval <= 0.05) #
+str(c1_WT_12_q) # 2225 changed exp
+
+# WT overlap b/w 6 and 12 hpi
+c1_WT_infection <- inner_join(c1_WT_6_q, c1_WT_12_q, by=join_by(target_id))[,c(2:5,9,17)]
+str(c1_WT_infection) # 115
+
+# set up 6 hpi for clone 250
+so2_250_6 <- sleuth_prep(s2c_250_6, target_mapping=t2g, aggregation_column='ens_gene',
+                  extra_bootstrap_summary=T, read_bootstrap_tpm=T)
+so2_250_6 <- sleuth_fit(so2_250_6, ~c1, 'full') 
+so2_250_6 <- sleuth_fit(so2_250_6, ~1,  's')
+so2_250_6 <- sleuth_lrt(so2_250_6, 's', 'full')
+so2_250_6 <- sleuth_results(so2_250_6, 's:full', 'lrt', show_all=F)
+so2_250_6_q <- dplyr::filter(so2_250_6, qval <= 0.05) #
+str(so2_250_6_q) # 837 changed exp
+
+# set up 12 hpi for clone 250
+so2_250_12 <- sleuth_prep(s2c_250_12, target_mapping=t2g, aggregation_column='ens_gene',
+                  extra_bootstrap_summary=T, read_bootstrap_tpm=T)
+so2_250_12 <- sleuth_fit(so2_250_12, ~c1, 'full') 
+so2_250_12 <- sleuth_fit(so2_250_12, ~1,  's')
+so2_250_12 <- sleuth_lrt(so2_250_12, 's', 'full')
+so2_250_12 <- sleuth_results(so2_250_12, 's:full', 'lrt', show_all=F)
+so2_250_12_q <- dplyr::filter(so2_250_12, qval <= 0.05) #
+str(so2_250_12_q) # 1664 changed exp
+
+# 250 overlap b/w 6 and 12 hpi
+c1_250_infection <- inner_join(so2_250_6_q, so2_250_12_q, by=join_by(target_id))[,c(2:5,9,17)]
+str(c1_250_infection) # 409 genes
+
+# set up 6 hpi for clone 600
+so2_600_6 <- sleuth_prep(s2c_600_6, target_mapping=t2g, aggregation_column='ens_gene',
+                  extra_bootstrap_summary=T, read_bootstrap_tpm=T)
+so2_600_6 <- sleuth_fit(so2_600_6, ~c1, 'full') 
+so2_600_6 <- sleuth_fit(so2_600_6, ~1,  's')
+so2_600_6 <- sleuth_lrt(so2_600_6, 's', 'full')
+so2_600_6 <- sleuth_results(so2_600_6, 's:full', 'lrt', show_all=F)
+so2_600_6_q <- dplyr::filter(so2_600_6, qval <= 0.05) #
+str(so2_600_6_q) # 1296 changed exp
+
+# set up 12 hpi for clone 600
+so2_600_12 <- sleuth_prep(s2c_600_12, target_mapping=t2g, aggregation_column='ens_gene',
+                  extra_bootstrap_summary=T, read_bootstrap_tpm=T)
+so2_600_12 <- sleuth_fit(so2_600_12, ~c1, 'full') 
+so2_600_12 <- sleuth_fit(so2_600_12, ~1,  's')
+so2_600_12 <- sleuth_lrt(so2_600_12, 's', 'full')
+so2_600_12 <- sleuth_results(so2_600_12, 's:full', 'lrt', show_all=F)
+so2_600_12_q <- dplyr::filter(so2_600_12, qval <= 0.05) #
+str(so2_600_12_q) # 2366 changed exp
+
+# 600 overlap b/w 6 and 12 hpi
+c1_600_infection <- inner_join(so2_600_6_q, so2_600_12_q, by=join_by(target_id))[,c(2:5,9,17)]
+str(c1_600_infection) # 838 genes
+
+# join WT and 250
+c1_WT_250_infection <- inner_join(c1_WT_infection, c1_250_infection,
+                                  by=join_by(target_id))[,c(1:6,10,11)]
+str(c1_WT_250_infection) # 78 genes
+
+# join WT_250 and 600
+c1_WT_250_600_infection <- inner_join(c1_WT_250_infection, c1_600_infection,
+                                  by=join_by(target_id))[,c(1:8,12,13)]
+str(c1_WT_250_infection) # 73 genes overall
+write.csv(c1_WT_250_infection, "infection.DE.groups.csv",quote=T,row.names=F)
+
+####### compare 6 s2c_6 vs 12 hpi s2c_12 
+####### check for consistent changes over time
+
+# set up 6 hpi
+so2_6 <- sleuth_prep(s2c_6, target_mapping=t2g, aggregation_column='ens_gene',
+                  extra_bootstrap_summary=T, read_bootstrap_tpm=T)
+so2_6 <- sleuth_fit(so2_6, ~c1 + c2, 'full') 
+
+# assess c1 
+so2_6 <- sleuth_fit(so2_6, ~c2 ,  'c1only2')
+so2_6 <- sleuth_lrt(so2_6, 'c1only2', 'full')
+c1_6 <- sleuth_results(so2_6, 'c1only2:full', 'lrt', show_all=F)
+c1_6_q <- dplyr::filter(c1_6, qval <= 0.05) #
+str(c1_6_q) # 2017 changed exp
+
+# assess c2
+so2_6 <- sleuth_fit(so2_6, ~c1 ,  'c2only2')
+so2_6 <- sleuth_lrt(so2_6, 'c2only2', 'full')
+c2_6 <- sleuth_results(so2_6, 'c2only2:full', 'lrt', show_all=F)
+c2_6_q <- dplyr::filter(c2_6, qval <= 0.05) #
+str(c2_6_q) # 9360 changed exp
+
+# set up 12 hpi
+so2_12 <- sleuth_prep(s2c_12, target_mapping=t2g, aggregation_column='ens_gene',
+                  extra_bootstrap_summary=T, read_bootstrap_tpm=T)
+so2_12 <- sleuth_fit(so2_12, ~c1 + c2, 'full') 
+
+# assess c1 12 hpi
+so2_12 <- sleuth_fit(so2_12, ~c2 ,  'c1only2')
+so2_12 <- sleuth_lrt(so2_12, 'c1only2', 'full')
+c1_12 <- sleuth_results(so2_12, 'c1only2:full', 'lrt', show_all=F)
+c1_12_q <- dplyr::filter(c1_12, qval <= 0.05) #
+str(c1_12_q) # 8993 changed exp
+
+# assess c2 12 hpi
+so2_12 <- sleuth_fit(so2_12, ~c1 ,  'c2only2')
+so2_12 <- sleuth_lrt(so2_12, 'c2only2', 'full')
+c2_12 <- sleuth_results(so2_12, 'c2only2:full', 'lrt', show_all=F)
+c2_12_q <- dplyr::filter(c2_12, qval <= 0.05) #
+str(c2_12_q) # 4621 changed exp
+
+# c1 overlap b/w 6 and 12 hpi
+c1_time <- inner_join(c1_6_q, c1_12_q, by=join_by(target_id))[,c(2:5,9,17)]
+str(c1_time) # 1569
+write.csv(c1_time, "infection.DE.time.csv",quote=T,row.names=F)
+
+c1_time2 <- inner_join(c1_6, c1_12, by=join_by(target_id))[,c(2:5,9,17)]
+str(c1_time2) # 11,047
+write.csv(c1_time2, "infection.DE.time.ALL.csv",quote=T,row.names=F)
+
+# c2 overlap b/w 6 and 12 hpi
+c2_time <- inner_join(c2_6_q, c2_12_q, by=join_by(target_id))[,c(2:5,9,17)]
+str(c2_time) # 11,333 
+write.csv(c2_time, "CRISPR.DE.time.csv",quote=T,row.names=F)
+
+####### compare WT-250 s2c_not600 vs WT-600 s2c_not250
+
+so2_600 <- sleuth_prep(s2c_not600, target_mapping=t2g, aggregation_column='ens_gene',
+                  extra_bootstrap_summary=T, read_bootstrap_tpm=T)
+so2_600 <- sleuth_fit(so2_600, ~c1 + c3, 'full') # infection + time
+
+# assess c1 
+so2_600 <- sleuth_fit(so2_600, ~c3, 'c1only2') # infection
+so2_600 <- sleuth_lrt(so2_600, 'c1only2', 'full')
+c1_600 <- sleuth_results(so2_600, 'c1only2:full', 'lrt', show_all=F)
+c1_600_q <- dplyr::filter(c1_600, qval <= 0.05) #
+str(c1_600_q) # 1068 changed exp
+
+# assess c3
+so2_600 <- sleuth_fit(so2_600, ~c1, 'c3only2')
+so2_600 <- sleuth_lrt(so2_600, 'c3only2', 'full')
+c3_600 <- sleuth_results(so2_600, 'c3only2:full', 'lrt', show_all=F)
+c3_600_q <- dplyr::filter(c3_600, qval <= 0.05) #
+str(c3_600_q) # 3590 changed exp
+
+# set up WT-600
+so2_250 <- sleuth_prep(s2c_not250, target_mapping=t2g, aggregation_column='ens_gene',
+                  extra_bootstrap_summary=T, read_bootstrap_tpm=T)
+so2_250 <- sleuth_fit(so2_250, ~c1 + c3, 'full') 
+
+# assess c1 12 hpi
+so2_250 <- sleuth_fit(so2_250, ~c3 ,  'c1only2')
+so2_250 <- sleuth_lrt(so2_250, 'c1only2', 'full')
+c1_250 <- sleuth_results(so2_250, 'c1only2:full', 'lrt', show_all=F)
+c1_250_q <- dplyr::filter(c1_250, qval <= 0.05) #
+str(c1_250_q) # 1523 changed exp
+
+# assess c2 12 hpi
+so2_250 <- sleuth_fit(so2_250, ~c1 ,  'c3only2')
+so2_250 <- sleuth_lrt(so2_250, 'c3only2', 'full')
+c3_250 <- sleuth_results(so2_250, 'c3only2:full', 'lrt', show_all=F)
+c3_250_q <- dplyr::filter(c3_250, qval <= 0.05) #
+str(c3_250_q) # 2634 changed exp
+
+# c1 overlap b/w WT-250 & WT-600
+c1_crispr <- inner_join(c1_600_q, c1_250_q, by=join_by(target_id))[,c(2:5,9,17)]
+str(c1_crispr ) # 784 
+write.csv(c1_crispr, "infection.DE.crispr.csv",quote=T,row.names=F)
+
+# c1 anti-overlap b/w WT-250 & WT-600
+# anti_join(df1, df2, by='Q1')
+c1_not_crispr <- anti_join(c1_250_q, c1_600_q, by='target_id')[,c(2:5)]
+str(c1_not_crispr ) # 739 
+write.csv(c1_not_crispr, "NOT_infection.DE.crispr.csv",quote=T,row.names=F)
+
+# do these overlap with c1_time that had 1,569 genes associated with infection?
+o1  <- inner_join(c1_crispr, c1_time, by=join_by(target_id))[,c(1:6)]
+str(o1) # 628
+write.csv(o1, "infection.DE.infection.csv",quote=T,row.names=F)
+
+# c3 overlap b/w WT-250 & WT-600
+c3_crispr  <- inner_join(c3_600_q, c3_250_q, by=join_by(target_id))[,c(2:5,9,17)]
+str(c3_crispr ) # 1996 
+write.csv(c3_crispr, "time.DE.crispr.csv",quote=T,row.names=F)
+
+c3_crispr2  <- inner_join(c3_600, c3_250, by=join_by(target_id))[,c(2:5,9,17)]
+str(c3_crispr2 ) # 11,092 
+write.csv(c3_crispr2, "time.DE.crispr.ALL.csv",quote=T,row.names=F)
+
+# do these overlap with c1_time that had 1,569 genes associated with infection?
+o2  <- inner_join(c2_time, c3_crispr, by=join_by(target_id))[,c(1:6)]
+str(o2) # 1974
+write.csv(o2, "crispr.DE.crispr.csv",quote=T,row.names=F)
+
+# now compare overlaps of s2c_not600_6 v  s2c_not250_6
+so2_600_6 <- sleuth_prep(s2c_not600_6, target_mapping=t2g, aggregation_column='ens_gene',
+                  extra_bootstrap_summary=T, read_bootstrap_tpm=T)
+so2_600_6 <- sleuth_fit(so2_600_6, ~c1, 'full')  # c1 only
+so2_600_6 <- sleuth_fit(so2_600_6, ~1 ,  'c1only2')
+so2_600_6 <- sleuth_lrt(so2_600_6, 'c1only2', 'full')
+c1_600_6 <- sleuth_results(so2_600_6, 'c1only2:full', 'lrt', show_all=F)
+c1_600_6_q <- dplyr::filter(c1_600_6, qval <= 0.05) #
+str(c1_600_6_q) # 144 changed exp
+
+so2_250_6 <- sleuth_prep(s2c_not250_6, target_mapping=t2g, aggregation_column='ens_gene',
+                  extra_bootstrap_summary=T, read_bootstrap_tpm=T)
+so2_250_6 <- sleuth_fit(so2_250_6, ~c1, 'full')  # c1 only
+so2_250_6 <- sleuth_fit(so2_250_6, ~1 ,  'c1only2')
+so2_250_6 <- sleuth_lrt(so2_250_6, 'c1only2', 'full')
+c1_250_6 <- sleuth_results(so2_250_6, 'c1only2:full', 'lrt', show_all=F)
+c1_250_6_q <- dplyr::filter(c1_250_6, qval <= 0.05) #
+str(c1_250_6_q) # 243 changed exp
+
+# c1 overlap b/w WT-250 & WT-600 at 6 hpi only
+c1_crispr_6 <- inner_join(c1_600_6_q, c1_250_6_q, by=join_by(target_id))[,c(2:5,9,17)]
+str(c1_crispr_6 ) # 94
+write.csv(c1_crispr_6, "infection.DE.crispr.6only.csv",quote=T,row.names=F)
+
+# now compare overlaps of s2c_not600_12 v  s2c_not250_12
+so2_600_12 <- sleuth_prep(s2c_not600_12, target_mapping=t2g, aggregation_column='ens_gene',
+                  extra_bootstrap_summary=T, read_bootstrap_tpm=T)
+so2_600_12 <- sleuth_fit(so2_600_12, ~c1, 'full')  # c1 only
+so2_600_12 <- sleuth_fit(so2_600_12, ~1 ,  'c1only2')
+so2_600_12 <- sleuth_lrt(so2_600_12, 'c1only2', 'full')
+c1_600_12 <- sleuth_results(so2_600_12, 'c1only2:full', 'lrt', show_all=F)
+c1_600_12_q <- dplyr::filter(c1_600_12, qval <= 0.05) #
+str(c1_600_12_q) # 1254 changed exp
+
+so2_250_12 <- sleuth_prep(s2c_not250_12, target_mapping=t2g, aggregation_column='ens_gene',
+                  extra_bootstrap_summary=T, read_bootstrap_tpm=T)
+so2_250_12 <- sleuth_fit(so2_250_12, ~c1, 'full')  # c1 only
+so2_250_12 <- sleuth_fit(so2_250_12, ~1 ,  'c1only2')
+so2_250_12 <- sleuth_lrt(so2_250_12, 'c1only2', 'full')
+c1_250_12 <- sleuth_results(so2_250_12, 'c1only2:full', 'lrt', show_all=F)
+c1_250_12_q <- dplyr::filter(c1_250_12, qval <= 0.05) #
+str(c1_250_12_q) # 887 changed exp
+
+# c1 overlap b/w WT-250 & WT-600 at 6 hpi only
+c1_crispr_12 <- inner_join(c1_600_12_q, c1_250_12_q, by=join_by(target_id))[,c(2:5,9,17)]
+str(c1_crispr_12) # 887
+write.csv(c1_crispr_12, "infection.DE.crispr.12only.csv",quote=T,row.names=F)
+
+c1_crispr_6_12 <- inner_join(c1_crispr_6, c1_crispr_12,
+                             by=join_by(target_id))[,c(1:6,10,11)]
+str(c1_crispr_6_12) # 70 
+write.csv(c1_crispr_6_12, "infection.DE.crispr.6and12.csv",quote=T,row.names=F)
+
+c1_250_6_q2 <- dplyr::filter(c1_250_6, qval <= 2) # for comparison of q values
+c1_600_6_q2 <- dplyr::filter(c1_600_6, qval <= 2) # for comparison of q values
+c1_crispr_6_comparison <- inner_join(c1_600_6_q2, c1_250_6_q2, #WT-250 & WT-600
+                    by=join_by(target_id))[,c(2:5,9,17)]
+c1_250_12_q2 <- dplyr::filter(c1_250_12, qval <= 2) # for comparison of q values
+c1_600_12_q2 <- dplyr::filter(c1_600_12, qval <= 2) # for comparison of q values
+c1_crispr_12_comparison <- inner_join(c1_600_12_q2, c1_250_12_q2, #WT-250 & WT-600
+                    by=join_by(target_id))[,c(2:5,9,17)]
+c1_crispr_6_12_comparison <-inner_join(c1_crispr_6_comparison,c1_crispr_12_comparison,
+                             by=join_by(target_id))[,c(1:6,10,11)]
+
+str(c1_crispr_6_12_comparison)
+write.csv(c1_crispr_6_12_comparison, "infection.DE.crispr.6and12.ALL.csv",
+          quote=T,row.names=F)
+
+# check groups
+cor(c1_crispr_6_12_comparison$qval.x.x, c1_crispr_6_12_comparison$qval.y.x)
+# WT-250 comparison at 6 hpi vs WT-600 comparison at 6 hpi: r=0.55 
+cor(c1_crispr_6_12_comparison$qval.x.x, c1_crispr_6_12_comparison$qval.x.y)
+# WT-250 comparison at 6 hpi vs WT-250 comparison at 12 hpi: r=0.31
+cor(c1_crispr_6_12_comparison$qval.x.x, c1_crispr_6_12_comparison$qval.y.y)
+# WT-250 comparison at 6 hpi vs WT-600 comparison at 12 hpi: r=0.29
+cor(c1_crispr_6_12_comparison$qval.x.y, c1_crispr_6_12_comparison$qval.y.x)
+# WT-250 comparison at 12 hpi vs WT-600 comparison at 6 hpi: r=0.29
+cor(c1_crispr_6_12_comparison$qval.x.y, c1_crispr_6_12_comparison$qval.y.y)
+# WT-250 comparison at 12 hpi vs WT-600 comparison at 12 hpi: r=0.68
+cor(c1_crispr_6_12_comparison$qval.y.x, c1_crispr_6_12_comparison$qval.y.y)
+# WT-600 comparison at 6 hpi vs WT-600 comparison at 12 hpi: r=0.38
+
+par(mfrow=c(2,2))
+hist(c1_crispr_6_12_comparison$qval.x.x, breaks=111, col="grey",
+     xlab="WT-250 at 6 hpi", main="")
+hist(c1_crispr_6_12_comparison$qval.y.x, breaks=111, col="red",
+      xlab="WT-600 at 6 hpi", main="")
+hist(c1_crispr_6_12_comparison$qval.x.y, breaks=111, col="blue",
+      xlab="WT-250 at 12 hpi", main="")
+hist(c1_crispr_6_12_comparison$qval.y.y, breaks=111, col="brown",
+      xlab="WT-600 at 12 hpi", main="")
+
+par(mfrow=c(2,3))
+qqplot(c1_crispr_6_12_comparison$qval.x.x,c1_crispr_6_12_comparison$qval.y.x,
+       pch=2, xlab=c("WT-250 comparison at 6 hpi"), lty ="dotted",
+       ylab="WT-600 comparison at 6 hpi" ) +abline(a = 0, b = 1, col="grey")
+qqplot(c1_crispr_6_12_comparison$qval.x.x,c1_crispr_6_12_comparison$qval.x.y,
+       pch=3, xlab=c("WT-250 comparison at 6 hpi"), lty ="dotted",
+       ylab="WT-250 comparison at 12 hpi" ) +abline(a = 0, b = 1, col="red")
+qqplot(c1_crispr_6_12_comparison$qval.x.x,c1_crispr_6_12_comparison$qval.y.y,
+       pch=4, xlab=c("WT-250 comparison at 6 hpi"), lty ="dotted",
+       ylab="WT-600 comparison at 12 hpi" ) +abline(a = 0, b = 1, col="blue")
+qqplot(c1_crispr_6_12_comparison$qval.x.y,c1_crispr_6_12_comparison$qval.y.x,
+       pch=5, xlab=c("WT-250 comparison at 12 hpi"), lty ="dotted",
+       ylab="WT-600 comparison at 6 hpi" ) +abline(a = 0, b = 1, col="green")
+qqplot(c1_crispr_6_12_comparison$qval.x.y,c1_crispr_6_12_comparison$qval.y.y,
+       pch=6, xlab=c("WT-250 comparison at 12 hpi"), lty ="dotted",
+       ylab="WT-600 comparison at 12 hpi" ) +abline(a = 0, b = 1, col="cyan")
+qqplot(c1_crispr_6_12_comparison$qval.y.x,c1_crispr_6_12_comparison$qval.y.y,
+       pch=7, xlab=c("WT-600 comparison at 6 hpi"), lty ="dotted",
+       ylab="WT-600 comparison at 12 hpi" ) +abline(a = 0, b = 1, col="purple")
+ 
+################################################
+## Now let's do the full model on transcripts
+
+full <- read.csv("table.new.csv", header=T, sep="\t") # metadata
+sofull <- sleuth_prep(full,  extra_bootstrap_summary=T, read_bootstrap_tpm=T) #setup
+sofull <- sleuth_fit(sofull, ~c1+c2+c3 ,'full') 
+sofull <- sleuth_fit(sofull, ~c2 + c3  , 'c1only')
+sofull <- sleuth_lrt(sofull, 'c1only', 'full')
+# get table # wald test not advised, hence use LRT
+c1only <- sleuth_results(sofull, 'c1only:full', 'lrt', show_all=F)
+c1only_q <- dplyr::filter(c1only, qval <= 0.05  ) #  )
+str(c1only_q) # 4,810 transcripts
+head(c1only_q[,c(1,2,3,4)])
+
+pdf(paste("infection.DE.crispr.6and12.",
+    subset(t2g, ens_gene==c1_crispr_6_12[1,1])[1,1], ".pdf", sep=""),
+    width=12, height=6)
+plot_bootstrap(sofull,subset(t2g, ens_gene==c1_crispr_6_12[1,1])[1,1],
+               units="est_counts", color_by = "c1") # plot an isoform 
+dev.off()
+
+pdf(paste("infection.DE.crispr.6and12.",
+    subset(t2g, ens_gene==c1_crispr_6_12[1,1])[2,1], ".pdf", sep=""),
+    width=12, height=6)
+plot_bootstrap(sofull,subset(t2g, ens_gene==c1_crispr_6_12[2,1])[1,1],
+               units="est_counts", color_by = "c1") # plot an isoform 
+dev.off()
+
+pdf("Exp_levels_c1_ENSGALT00010047429.2.pdf", width=15, height=8)
+plot_bootstrap(sofull,"ENSGALT00010047429.1",units="est_counts",
+               color_by = "c1") # plot an isoform 
+dev.off()
+
+pdf("plot_transcript_heatmap.c1.full.pdf", width=11,height=9) # tx heatmap
+plot_transcript_heatmap(sofull, head(c1only_q,n=20)$target_id, 'est_counts')
+dev.off()
+
+# c2 only - transcripts WT vs 250 vs 600
+
+sofull <- sleuth_fit(sofull, ~c1 + c3 , 'c2only')
+sofull <- sleuth_lrt(sofull, 'c2only', 'full')
+c2only <- sleuth_results(sofull, 'c2only:full', 'lrt', show_all=F)
+c2only_q <- dplyr::filter(c2only, qval <= 0.05  ) #  )
+str(c2only_q) # 15,687
+head(c2only_q[,c(1,2,3,4)])
+
+pdf("Exp_levels_c2_ENSGALT00010056554.1.pdf", width=15, height=8)
+plot_bootstrap(sofull,  "ENSGALT00010056554.1",
+               units="est_counts", color_by = "c2") # plot an isoform 
+dev.off()
+
+pdf("plot_transcript_heatmap.c2.full.pdf", width=11,height=9) # tx heatmap
+plot_transcript_heatmap(sofull, head(c2only_q,n=20)$target_id, 'est_counts')
+dev.off()
+
+# c3 only - transcripts 6 vs 12 hpi
+
+sofull <- sleuth_fit(sofull, ~c1 + c2  , 'c3only')
+sofull <- sleuth_lrt(sofull, 'c3only', 'full')
+c3only <- sleuth_results(sofull, 'c3only:full', 'lrt', show_all=F)
+c3only_q <- dplyr::filter(c3only, qval <= 0.05   ) #  )
+str(c3only_q) #   15212
+head(c3only_q[,c(1,2,3,4)])
+
+pdf("Exp_levels_c3_ENSGALT00010042196.1.pdf", width=15, height=8)
+plot_bootstrap(sofull,"ENSGALT00010042196.1",units="est_counts",
+               color_by = "c3") # plot an isoform 
+dev.off()
+
+pdf("plot_transcript_heatmap.c3.full.pdf", width=11,height=9) # tx heatmap
+plot_transcript_heatmap(sofull, head(c3only_q,n=20)$target_id, 'est_counts')
+dev.off()
+
+
+##### Simple models # Don't use this #
+###########################################
+```
+
+
+
+
