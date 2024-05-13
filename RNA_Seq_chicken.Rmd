@@ -221,16 +221,6 @@ out1_2_g_2 <- inner_join(t2g, out1_2_2, by=join_by(target_id))
 str(out1_2_g_2) # 44,937 entries across 17,068 genes
 write.csv(out1_2_g_2, "limma.c2.nofilter.csv",quote=T,row.names=F) # c2
 
-# without filter
-y <- DGEList(txi.kallisto$counts)
-v3_2 <- voom(calcNormFactors(y), design3)
-fitm3_2 <- eBayes(lmFit(v3_2, design3), trend=T)
-out1_3_2 <- topTable(fitm3_2, n=dim(fitm3_2$coefficients)[1])
-out1_3_2$target_id <- rownames(out1_3_2)
-out1_3_g_2 <- inner_join(t2g, out1_3_2, by=join_by(target_id)) 
-str(out1_3_g_2) # 44,937 entries across 17,068 genes
-write.csv(out1_3_g_2, "limma.c3.nofilter.csv",quote=T,row.names=F) # c3
-str(out1_3_g_2$ens_gene)
 
 ## c3only ## to get log2FC
 
@@ -245,6 +235,18 @@ out1_3$target_id <- rownames(out1_3)
 out1_3_g <- inner_join(t2g, out1_3, by=join_by(target_id)) 
 str(out1_3_g) # 21,961
 write.csv(out1_3_g, "limma.c3.csv",quote=T,row.names=F) # c3
+
+# without filter
+y <- DGEList(txi.kallisto$counts)
+v3_2 <- voom(calcNormFactors(y), design3)
+fitm3_2 <- eBayes(lmFit(v3_2, design3), trend=T)
+out1_3_2 <- topTable(fitm3_2, n=dim(fitm3_2$coefficients)[1])
+out1_3_2$target_id <- rownames(out1_3_2)
+out1_3_g_2 <- inner_join(t2g, out1_3_2, by=join_by(target_id)) 
+str(out1_3_g_2) # 44,937 entries across 17,068 genes
+write.csv(out1_3_g_2, "limma.c3.nofilter.csv",quote=T,row.names=F) # c3
+str(out1_3_g_2$ens_gene)
+
 
 #################################
 # Let's test across genes  
@@ -361,10 +363,6 @@ c1_WT_12 <- sleuth_results(so2_WT_12, 's:full', 'lrt', show_all=F)
 c1_WT_12_q <- dplyr::filter(c1_WT_12, qval <= 0.05) #
 str(c1_WT_12_q) # 2225 changed exp
 
-# WT overlap b/w 6 and 12 hpi
-c1_WT_infection <- inner_join(c1_WT_6_q, c1_WT_12_q, by=join_by(target_id))[,c(2:5,9,17)]
-str(c1_WT_infection) # 115
-
 # set up 6 hpi for clone 250
 so2_250_6 <- sleuth_prep(s2c_250_6, target_mapping=t2g, aggregation_column='ens_gene',
                   extra_bootstrap_summary=T, read_bootstrap_tpm=T)
@@ -384,10 +382,6 @@ so2_250_12 <- sleuth_lrt(so2_250_12, 's', 'full')
 so2_250_12 <- sleuth_results(so2_250_12, 's:full', 'lrt', show_all=F)
 so2_250_12_q <- dplyr::filter(so2_250_12, qval <= 0.05) #
 str(so2_250_12_q) # 1664 changed exp
-
-# 250 overlap b/w 6 and 12 hpi
-c1_250_infection <- inner_join(so2_250_6_q, so2_250_12_q, by=join_by(target_id))[,c(2:5,9,17)]
-str(c1_250_infection) # 409 genes
 
 # set up 6 hpi for clone 600
 so2_600_6 <- sleuth_prep(s2c_600_6, target_mapping=t2g, aggregation_column='ens_gene',
@@ -409,20 +403,52 @@ so2_600_12 <- sleuth_results(so2_600_12, 's:full', 'lrt', show_all=F)
 so2_600_12_q <- dplyr::filter(so2_600_12, qval <= 0.05) #
 str(so2_600_12_q) # 2366 changed exp
 
+# WT overlap b/w 6 and 12 hpi
+c1_WT_infection <- inner_join(c1_WT_6_q, c1_WT_12_q,
+                              by=join_by(target_id))[,c(2:5,7,9,15,17)]
+str(c1_WT_infection) # 115
+
+c1_WT_infection_ALL <- inner_join(c1_WT_6, c1_WT_12,
+                              by=join_by(target_id))[,c(2:5,7,9,15,17)]
+str(c1_WT_infection_ALL) # 11k
+
+# 250 overlap b/w 6 and 12 hpi
+c1_250_infection <- inner_join(so2_250_6_q, so2_250_12_q,
+                               by=join_by(target_id))[,c(2:5,7,9,15,17)]
+str(c1_250_infection) # 409 genes
+
+c1_250_infection_ALL <- inner_join(so2_250_6, so2_250_12,
+                               by=join_by(target_id))[,c(2:5,7,9,15,17)]
+str(c1_250_infection_ALL) # 11k genes
+
 # 600 overlap b/w 6 and 12 hpi
-c1_600_infection <- inner_join(so2_600_6_q, so2_600_12_q, by=join_by(target_id))[,c(2:5,9,17)]
+c1_600_infection <- inner_join(so2_600_6_q, so2_600_12_q,
+                               by=join_by(target_id))[,c(2:5,7,9,15,17)]
 str(c1_600_infection) # 838 genes
+
+c1_600_infection_ALL <- inner_join(so2_600_6, so2_600_12,
+                               by=join_by(target_id))[,c(2:5,7,9,15,17)]
+str(c1_600_infection_ALL) # 11k genes
 
 # join WT and 250
 c1_WT_250_infection <- inner_join(c1_WT_infection, c1_250_infection,
-                                  by=join_by(target_id))[,c(1:6,10,11)]
+                                  by=join_by(target_id))[,c(1:8,12:15)]
 str(c1_WT_250_infection) # 78 genes
+
+c1_WT_250_infection_ALL <- inner_join(c1_WT_infection_ALL, c1_250_infection_ALL,
+                                  by=join_by(target_id))[,c(1:8,12:15)]
+str(c1_WT_250_infection_ALL) # 10.8k genes
 
 # join WT_250 and 600
 c1_WT_250_600_infection <- inner_join(c1_WT_250_infection, c1_600_infection,
-                                  by=join_by(target_id))[,c(1:8,12,13)]
-str(c1_WT_250_infection) # 73 genes overall
-write.csv(c1_WT_250_infection, "infection.DE.groups.csv",quote=T,row.names=F)
+                                  by=join_by(target_id))[,c(1:12,16:19)]
+str(c1_WT_250_600_infection) # 73 genes overall
+write.csv(c1_WT_250_600_infection, "infection.DE.groups.csv",quote=T,row.names=F)
+
+c1_WT_250_600_infection_ALL <- inner_join(c1_WT_250_infection_ALL, c1_600_infection_ALL,
+                                  by=join_by(target_id))[,c(1:12,16:19)]
+str(c1_WT_250_600_infection_ALL) # 10,678 genes overall
+write.csv(c1_WT_250_600_infection_ALL, "infection.DE.groups.ALL.csv",quote=T,row.names=F)
 
 ####### compare 6 s2c_6 vs 12 hpi s2c_12 
 ####### check for consistent changes over time
@@ -523,6 +549,11 @@ c1_crispr <- inner_join(c1_600_q, c1_250_q, by=join_by(target_id))[,c(2:5,9,17)]
 str(c1_crispr ) # 784 
 write.csv(c1_crispr, "infection.DE.crispr.csv",quote=T,row.names=F)
 
+# c1 overlap b/w WT-250 & WT-600 without threshold for all
+c1_crispr <- inner_join(c1_600, c1_250, by=join_by(target_id))[,c(2:5,9,17)]
+str(c1_crispr ) # 11,092 
+write.csv(c1_crispr, "infection.DE.crispr.ALL.csv",quote=T,row.names=F)
+
 # c1 anti-overlap b/w WT-250 & WT-600
 # anti_join(df1, df2, by='Q1')
 c1_not_crispr <- anti_join(c1_250_q, c1_600_q, by='target_id')[,c(2:5)]
@@ -568,7 +599,7 @@ c1_250_6_q <- dplyr::filter(c1_250_6, qval <= 0.05) #
 str(c1_250_6_q) # 243 changed exp
 
 # c1 overlap b/w WT-250 & WT-600 at 6 hpi only
-c1_crispr_6 <- inner_join(c1_600_6_q, c1_250_6_q, by=join_by(target_id))[,c(2:5,9,17)]
+c1_crispr_6 <- inner_join(c1_600_6_q, c1_250_6_q, by=join_by(target_id))[,c(2:5,7,9,15,17)]
 str(c1_crispr_6 ) # 94
 write.csv(c1_crispr_6, "infection.DE.crispr.6only.csv",quote=T,row.names=F)
 
@@ -592,29 +623,36 @@ c1_250_12_q <- dplyr::filter(c1_250_12, qval <= 0.05) #
 str(c1_250_12_q) # 887 changed exp
 
 # c1 overlap b/w WT-250 & WT-600 at 6 hpi only
-c1_crispr_12 <- inner_join(c1_600_12_q, c1_250_12_q, by=join_by(target_id))[,c(2:5,9,17)]
+c1_crispr_12 <- inner_join(c1_600_12_q, c1_250_12_q, by=join_by(target_id))[,c(2:5,7,9,15,17)]
 str(c1_crispr_12) # 887
 write.csv(c1_crispr_12, "infection.DE.crispr.12only.csv",quote=T,row.names=F)
 
 c1_crispr_6_12 <- inner_join(c1_crispr_6, c1_crispr_12,
-                             by=join_by(target_id))[,c(1:6,10,11)]
-str(c1_crispr_6_12) # 70 
+                             by=join_by(target_id))[,c(1:8,12:15)]
+str(c1_crispr_6_12) # 70 rows x 8 variables
 write.csv(c1_crispr_6_12, "infection.DE.crispr.6and12.csv",quote=T,row.names=F)
+
+# need to get intersection of c1_time with c1_crispr_6_12
+
+dataset_2 <- inner_join(c1_time, c1_crispr_6_12, by=join_by(target_id))[,c(1:6,10,11)]
+str(dataset_2) # genes with DE due to infection and CRISPR
+
+##########
 
 c1_250_6_q2 <- dplyr::filter(c1_250_6, qval <= 2) # for comparison of q values
 c1_600_6_q2 <- dplyr::filter(c1_600_6, qval <= 2) # for comparison of q values
 c1_crispr_6_comparison <- inner_join(c1_600_6_q2, c1_250_6_q2, #WT-250 & WT-600
-                    by=join_by(target_id))[,c(2:5,9,17)]
+                    by=join_by(target_id))[,c(2:5,7,9,15,17)]
 c1_250_12_q2 <- dplyr::filter(c1_250_12, qval <= 2) # for comparison of q values
 c1_600_12_q2 <- dplyr::filter(c1_600_12, qval <= 2) # for comparison of q values
 c1_crispr_12_comparison <- inner_join(c1_600_12_q2, c1_250_12_q2, #WT-250 & WT-600
-                    by=join_by(target_id))[,c(2:5,9,17)]
+                    by=join_by(target_id))[,c(2:5,7,9,15,17)]
 c1_crispr_6_12_comparison <-inner_join(c1_crispr_6_comparison,c1_crispr_12_comparison,
-                             by=join_by(target_id))[,c(1:6,10,11)]
+                             by=join_by(target_id))[,c(1:8,12:15)]
 
 str(c1_crispr_6_12_comparison)
 write.csv(c1_crispr_6_12_comparison, "infection.DE.crispr.6and12.ALL.csv",
-          quote=T,row.names=F)
+          quote=T,row.names=F) # 10,955 genes
 
 # check groups
 cor(c1_crispr_6_12_comparison$qval.x.x, c1_crispr_6_12_comparison$qval.y.x)
